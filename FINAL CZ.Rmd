@@ -1,0 +1,1023 @@
+---
+title: "Final Congestion Pricing"
+output: html_document
+date: "2025-04-19"
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+## R Markdown
+
+This is an R Markdown document. Markdown is a simple formatting syntax for authoring HTML, PDF, and MS Word documents. For more details on using R Markdown see <http://rmarkdown.rstudio.com>.
+
+When you click the **Knit** button a document will be generated that includes both content as well as the output of any embedded R code chunks within the document. You can embed an R code chunk like this:
+
+```{r cars}
+summary(cars)
+```
+
+## Including Plots
+
+You can also embed plots, for example:
+
+```{r pressure, echo=FALSE}
+plot(pressure)
+```
+
+Note that the `echo = FALSE` parameter was added to the code chunk to prevent printing of the R code that generated the plot.
+
+```{r}
+library(readr)  
+library(dplyr) 
+library(tidyverse) 
+library(ggplot2)
+library(lubridate)
+library(geosphere)
+library(sp)
+
+install.packages("readr")
+install.packages("dplyr")
+install.packages("tidyverse")
+install.packages("ggplot2")
+install.packages("lubridate")
+install.packages("geosphere")
+
+subway_ridership_ordes_2025 <- read_csv("~/Documents/Spring 2025/Data Analysis using R/Final Project/MTA_Subway_Origin-Destination_Ridership_Estimate__Beginning_2025_JAN_filtered.csv")
+
+updated_subway_station_List_with_congestion_flag <- read_csv("~/Documents/Spring 2025/Data Analysis using R/Final Project/Updated_Subway_Station_List_with_Congestion_Flag.csv")
+
+```
+
+```{r}
+subway_ridership_ordes_2025 <- subway_ridership_ordes_2025 %>%
+  left_join(
+    updated_subway_station_List_with_congestion_flag %>%
+      rename(
+        `Origin Station Complex Name` = station_name,
+        in_pricing_zone_origin = congestion_area_flag
+      ),
+    by = "Origin Station Complex Name"
+  )
+
+# Join destination flag
+subway_ridership_ordes_2025 <- subway_ridership_ordes_2025 %>%
+  left_join(
+    updated_subway_station_List_with_congestion_flag %>%
+      rename(
+        `Destination Station Complex Name` = station_name,
+        in_pricing_zone_destination = congestion_area_flag
+      ),
+    by = "Destination Station Complex Name"
+  )
+
+inbound_cz_map_data <- subway_ridership_ordes_2025 %>%
+  filter(in_pricing_zone_origin == 0, in_pricing_zone_destination == 1) %>%
+  group_by(`Origin Station Complex Name`, `Origin Latitude`, `Origin Longitude`) %>%
+  summarise(
+    total_riders = sum(`Estimated Average Ridership`, na.rm = TRUE),
+    .groups = "drop"
+  ) %>%
+  arrange(desc(total_riders))
+
+
+```
+
+```{r}
+library(leaflet)
+library(scales)
+library(htmltools)
+
+pal <- colorNumeric("YlOrRd", domain = inbound_cz_map_data$total_riders)
+
+leaflet(inbound_cz_map_data) %>%
+  addTiles() %>%
+  addCircleMarkers(
+    lng = ~`Origin Longitude`,
+    lat = ~`Origin Latitude`,
+    radius = ~rescale(total_riders, to = c(4, 15)),
+    fillColor = ~pal(total_riders),
+    color = "#333333",
+    stroke = TRUE,
+    weight = 0.5,
+    fillOpacity = 0.8,
+    label = ~paste0(
+      "<b>", `Origin Station Complex Name`, "</b><br>",
+      "Inbound Riders: ", format(round(total_riders), big.mark = ",")
+    ) %>% lapply(HTML)
+  ) %>%
+  addLegend(
+    position = "bottomright",
+    pal = pal,
+    values = ~total_riders,
+    title = "Inbound Riders"
+  ) %>%
+  setView(lng = -73.985, lat = 40.75, zoom = 11)
+```
+```{r}
+missing_flagged_stations <- tibble::tibble(
+  station_name = c(
+    "8 St-NYU (R,W)",
+    "WTC Cortlandt (1)",
+    "East Broadway (F)",
+    "Broad St (J,Z)",
+    "1 Av (L)",
+    "3 Av (L)",
+    "Bryant Pk (B,D,F,M)/5 Av (7)",
+    "49 St (N,R,W)"
+  ),
+  congestion_area_flag = 1
+)
+
+updated_subway_station_List_with_congestion_flag <- updated_subway_station_List_with_congestion_flag %>%
+  filter(!station_name %in% missing_flagged_stations$station_name)
+
+# Step 3: Add the corrected entries (no duplication now)
+updated_subway_station_List_with_congestion_flag <- updated_subway_station_List_with_congestion_flag %>%
+  bind_rows(missing_flagged_stations)
+```
+
+```{r}
+inbound_cz_map_data <- subway_ridership_ordes_2025 %>%
+  filter(in_pricing_zone_origin == 0, in_pricing_zone_destination == 1) %>%
+  group_by(`Origin Station Complex Name`, `Origin Latitude`, `Origin Longitude`) %>%
+  summarise(
+    total_riders = sum(`Estimated Average Ridership`, na.rm = TRUE),
+    .groups = "drop"
+  ) %>%
+  arrange(desc(total_riders))
+
+```
+
+```{r}
+origin_outside_cz_only <- updated_subway_station_List_with_congestion_flag %>%
+  filter(congestion_area_flag == 0) %>%
+  distinct(station_name)
+
+inbound_cz_map_data <- subway_ridership_ordes_2025 %>%
+  filter(
+    `Origin Station Complex Name` %in% origin_outside_cz_only$station_name,
+    in_pricing_zone_destination == 1
+  ) %>%
+  group_by(`Origin Station Complex Name`, `Origin Latitude`, `Origin Longitude`) %>%
+  summarise(
+    total_riders = sum(`Estimated Average Ridership`, na.rm = TRUE),
+    .groups = "drop"
+  ) %>%
+  arrange(desc(total_riders))
+
+pal <- colorNumeric("YlOrRd", domain = inbound_cz_map_data$total_riders)
+
+leaflet(inbound_cz_map_data) %>%
+  addTiles() %>%
+  addCircleMarkers(
+    lng = ~`Origin Longitude`,
+    lat = ~`Origin Latitude`,
+    radius = ~rescale(total_riders, to = c(4, 15)),
+    fillColor = ~pal(total_riders),
+    color = "#333333",
+    stroke = TRUE,
+    weight = 0.5,
+    fillOpacity = 0.8,
+    label = ~paste0(
+      "<b>", `Origin Station Complex Name`, "</b><br>",
+      "Inbound Riders: ", format(round(total_riders), big.mark = ",")
+    ) %>% lapply(HTML)
+  ) %>%
+  addLegend(
+    position = "bottomright",
+    pal = pal,
+    values = ~total_riders,
+    title = "Inbound Riders to CZ in 2025"
+  ) %>%
+  setView(lng = -73.985, lat = 40.75, zoom = 11)
+
+
+```
+
+```{r}
+top10_origins <- inbound_cz_map_data %>%
+  slice_max(total_riders, n = 10)
+
+top10_origins
+
+```
+```{r}
+#OUTBOUND MAP
+origin_inside_cz_only <- updated_subway_station_List_with_congestion_flag %>%
+  filter(congestion_area_flag == 1) %>%
+  distinct(station_name)
+
+outbound_cz_map_data <- subway_ridership_ordes_2025 %>%
+  filter(
+    `Origin Station Complex Name` %in% origin_inside_cz_only$station_name,
+    in_pricing_zone_destination == 0
+  ) %>%
+  group_by(`Origin Station Complex Name`, `Origin Latitude`, `Origin Longitude`) %>%
+  summarise(
+    total_riders = sum(`Estimated Average Ridership`, na.rm = TRUE),
+    .groups = "drop"
+  ) %>%
+  arrange(desc(total_riders))
+
+pal_outbound <- colorNumeric("YlOrRd", domain = outbound_cz_map_data$total_riders)
+
+leaflet(outbound_cz_map_data) %>%
+  addTiles() %>%
+  addCircleMarkers(
+    lng = ~`Origin Longitude`,
+    lat = ~`Origin Latitude`,
+    radius = ~rescale(total_riders, to = c(4, 15)),
+    fillColor = ~pal_outbound(total_riders),
+    color = "#333333",
+    stroke = TRUE,
+    weight = 0.5,
+    fillOpacity = 0.8,
+    label = ~paste0(
+      "<b>", `Origin Station Complex Name`, "</b><br>",
+      "Outbound Riders: ", format(round(total_riders), big.mark = ",")
+    ) %>% lapply(HTML)
+  ) %>%
+  addLegend(
+    position = "bottomright",
+    pal = pal_outbound,
+    values = ~total_riders,
+    title = "Outbound Riders"
+  ) %>%
+  setView(lng = -73.985, lat = 40.75, zoom = 11)
+```
+
+```{r}
+subway_ridership_ordes_2025 <- subway_ridership_ordes_2025 %>%
+  mutate(
+    day_type = case_when(
+      `Day of Week` %in% c("Saturday", "Sunday") ~ "Weekend",
+      TRUE ~ "Weekday"
+    )
+  )
+
+weekday_summary <- subway_ridership_ordes_2025 %>%
+  filter(in_pricing_zone_origin == 0, in_pricing_zone_destination == 1) %>%
+  group_by(day_type) %>%
+  summarise(
+    total_riders = sum(`Estimated Average Ridership`, na.rm = TRUE),
+    .groups = "drop"
+  )
+
+ggplot(weekday_summary, aes(x = day_type, y = total_riders, fill = day_type)) +
+  geom_col(width = 0.6, show.legend = FALSE) +
+  scale_y_continuous(labels = scales::comma) +
+  labs(
+    title = "Inbound Subway Riders into Congestion Zone",
+    subtitle = "Weekday vs Weekend – Jan 2025",
+    x = NULL,
+    y = "Total Estimated Riders"
+  ) +
+  theme_minimal(base_size = 14)
+
+ggplot(weekday_summary, aes(x = day_type, y = total_riders, fill = day_type)) +
+  geom_col(width = 0.6, show.legend = FALSE) +
+  scale_y_continuous(labels = scales::comma) +
+  labs(
+    title = "Inbound Subway Riders into Congestion Zone",
+    subtitle = "Weekday vs Weekend – Jan 2025",
+    x = NULL,
+    y = "Total Estimated Riders"
+  ) +
+  theme_minimal(base_size = 14)
+```
+
+```{r}
+subway_ridership_ordes_2025 <- subway_ridership_ordes_2025 %>%
+  mutate(date = as.Date(Timestamp, format = "%m/%d/%Y %I:%M:%S %p"))
+
+daily_inbound <- subway_ridership_ordes_2025 %>%
+  filter(in_pricing_zone_origin == 0, in_pricing_zone_destination == 1) %>%
+  group_by(date) %>%
+  summarise(
+    total_riders = sum(`Estimated Average Ridership`, na.rm = TRUE),
+    .groups = "drop"
+  )
+
+ggplot(daily_inbound, aes(x = date, y = total_riders)) +
+  geom_line(color = "#E24A33", size = 1.2) +
+  geom_point(size = 2, color = "#E24A33") +
+  scale_y_continuous(labels = scales::comma) +
+  labs(
+    title = "Daily Inbound Subway Riders into Congestion Zone",
+    subtitle = "Outside → Inside CZ | January 2025",
+    x = "Date",
+    y = "Total Estimated Riders"
+  ) +
+  theme_minimal(base_size = 14)
+```
+
+```{r}
+panel_2025 <- subway_ridership_ordes_2025 %>%
+  mutate(
+    date = as.Date(Timestamp, format = "%m/%d/%Y %I:%M:%S %p")
+  ) %>%
+  group_by(
+    date,
+    `Origin Station Complex ID`,
+    `Origin Station Complex Name`,
+    `Origin Latitude`,
+    `Origin Longitude`,
+    in_pricing_zone_origin
+  ) %>%
+  summarise(
+    total_origin_riders = sum(`Estimated Average Ridership`, na.rm = TRUE),
+    .groups = "drop"
+  )
+
+panel_2025 <- panel_2025 %>%
+  mutate(
+    day_of_week = weekdays(date),
+    post_congestion_pricing = if_else(date >= as.Date("2025-01-05"), 1, 0)
+  )
+
+head(panel_2025)
+n_distinct(panel_2025$`Origin Station Complex Name`)  # how many stations
+range(panel_2025$date)  # how many days
+
+
+
+```
+```{r}
+panel_dest_2025 <- subway_ridership_ordes_2025 %>%
+  mutate(
+    date = as.Date(Timestamp, format = "%m/%d/%Y %I:%M:%S %p")
+  ) %>%
+  group_by(
+    date,
+    `Destination Station Complex ID`,
+    `Destination Station Complex Name`,
+    `Destination Latitude`,
+    `Destination Longitude`,
+    in_pricing_zone_destination
+  ) %>%
+  summarise(
+    total_destination_riders = sum(`Estimated Average Ridership`, na.rm = TRUE),
+    .groups = "drop"
+  ) %>%
+  mutate(
+    day_of_week = weekdays(date),
+    post_congestion_pricing = if_else(date >= as.Date("2025-01-05"), 1, 0)
+  )
+
+```
+
+```{r}
+top_flows <- subway_ridership_ordes_2025 %>%
+  filter(in_pricing_zone_origin == 0, in_pricing_zone_destination == 1) %>%
+  group_by(
+    `Origin Station Complex Name`, `Origin Latitude`, `Origin Longitude`,
+    `Destination Station Complex Name`, `Destination Latitude`, `Destination Longitude`
+  ) %>%
+  summarise(
+    total_riders = sum(`Estimated Average Ridership`, na.rm = TRUE),
+    .groups = "drop"
+  ) %>%
+  arrange(desc(total_riders)) %>%
+  slice_max(total_riders, n = 50) 
+
+# Create lines between origin and destination
+lines_list <- lapply(1:nrow(top_flows), function(i) {
+  od <- top_flows[i, ]
+  gcIntermediate(
+    c(od$`Origin Longitude`, od$`Origin Latitude`),
+    c(od$`Destination Longitude`, od$`Destination Latitude`),
+    n = 100, addStartEnd = TRUE, sp = TRUE
+  )
+})
+
+# Create SpatialLinesDataFrame with attributes
+lines_spdf <- SpatialLinesDataFrame(
+  SpatialLines(lapply(seq_along(lines_list), function(i) {
+    Lines(list(Line(coordinates(lines_list[[i]]))), ID = as.character(i))
+  })),
+  data = top_flows[1:length(lines_list), , drop = FALSE]  # match metadata
+)
+leaflet() %>%
+  addTiles() %>%
+  # Draw flow lines
+  addPolylines(
+    data = lines_spdf,
+    weight = ~rescale(total_riders, to = c(1, 8)),
+    color = "red",
+    opacity = 0.6,
+    label = ~paste0(
+      `Origin Station Complex Name`, " → ", `Destination Station Complex Name`, "<br>",
+      "Riders: ", format(round(total_riders), big.mark = ",")
+    ) %>% lapply(htmltools::HTML)
+  ) %>%
+  # Optionally add origins
+  addCircleMarkers(
+    data = top_flows,
+    lng = ~`Origin Longitude`,
+    lat = ~`Origin Latitude`,
+    radius = 4,
+    color = "blue",
+    fillOpacity = 0.9,
+    label = ~paste0("Origin: ", `Origin Station Complex Name`)
+  ) %>%
+  # Optionally add destinations
+  addCircleMarkers(
+    data = top_flows,
+    lng = ~`Destination Longitude`,
+    lat = ~`Destination Latitude`,
+    radius = 4,
+    color = "green",
+    fillOpacity = 0.9,
+    label = ~paste0("Destination: ", `Destination Station Complex Name`)
+  ) %>%
+  setView(lng = -73.985, lat = 40.75, zoom = 11)
+```
+
+```{r}
+sankey_data <- subway_ridership_ordes_2025 %>%
+  filter(in_pricing_zone_origin == 0, in_pricing_zone_destination == 1) %>%
+  group_by(`Origin Station Complex Name`, `Destination Station Complex Name`) %>%
+  summarise(
+    total_riders = sum(`Estimated Average Ridership`, na.rm = TRUE),
+    .groups = "drop"
+  ) %>%
+  arrange(desc(total_riders)) %>%
+  slice_max(total_riders, n = 30)
+
+library(networkD3)
+install.packages("networkD3")
+
+# Get unique stations and create numeric IDs for each
+nodes <- data.frame(
+  name = unique(c(sankey_data$`Origin Station Complex Name`, sankey_data$`Destination Station Complex Name`)),
+  stringsAsFactors = FALSE
+)
+
+# Create links with source/target as indices
+links <- sankey_data %>%
+  mutate(
+    source = match(`Origin Station Complex Name`, nodes$name) - 1,
+    target = match(`Destination Station Complex Name`, nodes$name) - 1,
+    value = total_riders
+  ) %>%
+  select(source, target, value)
+
+sankeyNetwork(
+  Links = links,
+  Nodes = nodes,
+  Source = "source",
+  Target = "target",
+  Value = "value",
+  NodeID = "name",
+  fontSize = 12,
+  nodeWidth = 30,
+  sinksRight = FALSE  # makes left → right flow
+)
+
+save.image(file = "subway_project_2025_workspace.RData")
+
+```
+
+```{r}
+ridership_2024_nov <- read_csv("~/Documents/Spring 2025/Data Analysis using R/Final Project/MTA_Subway_Origin-Destination_Ridership_Estimate__2024_NOV.csv")
+ridership_2024_dec <- read_csv("~/Documents/Spring 2025/Data Analysis using R/Final Project/MTA_Subway_Origin-Destination_Ridership_Estimate__2024_DEC_CATEGORY (1).csv")
+
+# DEC uses dot notation, so we rename it to match NOV (space-based)
+
+ridership_2024_dec_clean <- ridership_2024_dec %>%
+  rename_with(~ gsub("\\.", " ", .x))  # replace dots with spaces
+
+subway_ridership_ordes_2024 <- bind_rows(
+  ridership_2024_nov,
+  ridership_2024_dec_clean
+)
+```
+
+```{r}
+
+subway_ridership_ordes_2024 <- subway_ridership_ordes_2024 %>%
+  mutate(date = mdy_hms(Timestamp))
+
+colnames(subway_ridership_ordes_2024)
+
+
+```
+```{r}
+subway_ridership_ordes_2024 <- subway_ridership_ordes_2024 %>%
+  left_join(
+    updated_subway_station_List_with_congestion_flag %>%
+      rename(
+        `Origin Station Complex Name` = station_name,
+        in_pricing_zone_origin = congestion_area_flag
+      ),
+    by = "Origin Station Complex Name"
+  ) %>%
+  left_join(
+    updated_subway_station_List_with_congestion_flag %>%
+      rename(
+        `Destination Station Complex Name` = station_name,
+        in_pricing_zone_destination = congestion_area_flag
+      ),
+    by = "Destination Station Complex Name"
+  )
+```
+
+```{r}
+#AGGREGATE DAILY INBOUND 2024 & 2025
+
+daily_inbound_2024 <- subway_ridership_ordes_2024 %>%
+  filter(in_pricing_zone_origin == 0, in_pricing_zone_destination == 1) %>%
+  group_by(date) %>%
+  summarise(
+    total_riders = sum(`Estimated Average Ridership`, na.rm = TRUE),
+    .groups = "drop"
+  ) %>%
+  mutate(year = 2024)
+
+daily_inbound_2025 <- subway_ridership_ordes_2025 %>%
+  filter(in_pricing_zone_origin == 0, in_pricing_zone_destination == 1) %>%
+  group_by(date) %>%
+  summarise(
+    total_riders = sum(`Estimated Average Ridership`, na.rm = TRUE),
+    .groups = "drop"
+  ) %>%
+  mutate(year = 2025)
+
+save.image(file = "subway_project_combined_workspace.RData")
+```
+
+```{r}
+daily_inbound_combined <- bind_rows(daily_inbound_2024, daily_inbound_2025)
+
+daily_inbound_combined <- daily_inbound_combined %>%
+  mutate(date = as.Date(date))
+
+ggplot(daily_inbound_combined, aes(x = date, y = total_riders, color = factor(year))) +
+  geom_line(size = 1.2) +
+  geom_point(size = 2) +
+  scale_y_continuous(labels = scales::comma) +
+  labs(
+    title = "Daily Inbound Subway Riders Into Congestion Zone",
+    subtitle = "Outside → Inside CZ (Nov 2024 – Jan 2025)",
+    x = "Date",
+    y = "Estimated Riders",
+    color = "Year"
+  ) +
+  geom_vline(xintercept = as.Date("2025-01-05"), linetype = "dashed", color = "red") +
+  annotate("text", x = as.Date("2025-01-05") + 1, y = max(daily_inbound_combined$total_riders, na.rm = TRUE) * 0.95,
+           label = "Congestion Pricing Starts", color = "red", hjust = 0) +
+  theme_minimal(base_size = 14)
+
+range(daily_inbound_2024$date)
+summary(daily_inbound_2024$total_riders)
+
+daily_inbound_2024 %>%
+  filter(total_riders == 0)
+
+table(subway_ridership_ordes_2024$in_pricing_zone_origin, useNA = "ifany")
+table(subway_ridership_ordes_2024$in_pricing_zone_destination, useNA = "ifany")
+
+summary(subway_ridership_ordes_2024$`Estimated Average Ridership`)
+
+```
+IMPORTANT TO NOTE: The 2024 data might be unscaled raw proportions, whereas the 2025 data is already scaled up using MetroCard/OMNY models.
+
+The 2025 file says it's "scaled-up OMNY and MetroCard return swipe data" — but the 2024 might not be.
+
+```{r}
+scaling_factor <- mean(subway_ridership_ordes_2025$`Estimated Average Ridership`, na.rm = TRUE) /
+                  mean(subway_ridership_ordes_2024$`Estimated Average Ridership`, na.rm = TRUE)
+
+scaling_factor  # You’ll likely get a factor like 30–50
+
+```
+2024 ridership estimates are only slightly lower (on average) than 2025, which is actually surprising and very good news!
+
+```{r}
+subway_ridership_ordes_2024 <- subway_ridership_ordes_2024 %>%
+  mutate(`Estimated Average Ridership Scaled` = `Estimated Average Ridership` * scaling_factor)
+
+daily_inbound_2024 <- subway_ridership_ordes_2024 %>%
+  filter(in_pricing_zone_origin == 0, in_pricing_zone_destination == 1) %>%
+  group_by(date) %>%
+  summarise(
+    total_riders = sum(`Estimated Average Ridership Scaled`, na.rm = TRUE),
+    .groups = "drop"
+  ) %>%
+  mutate(year = 2024)
+
+```
+
+```{r}
+daily_inbound_combined <- bind_rows(daily_inbound_2024, daily_inbound_2025)
+
+daily_inbound_combined <- daily_inbound_combined %>%
+  mutate(date = as.Date(date))
+
+# Plot it!
+ggplot(daily_inbound_combined, aes(x = date, y = total_riders, color = factor(year))) +
+  geom_line(size = 1.2) +
+  geom_point(size = 2) +
+  scale_y_continuous(labels = scales::comma) +
+  labs(
+    title = "Daily Inbound Subway Riders Into Congestion Zone",
+    subtitle = "Outside → Inside CZ (Nov 2024 – Jan 2025, Scaled)",
+    x = "Date",
+    y = "Estimated Riders",
+    color = "Year"
+  ) +
+  geom_vline(xintercept = as.Date("2025-01-05"), linetype = "dashed", color = "red") +
+  annotate("text", x = as.Date("2025-01-05") + 1, y = max(daily_inbound_combined$total_riders, na.rm = TRUE) * 0.95,
+           label = "Congestion Pricing Starts", color = "red", hjust = 0) +
+  theme_minimal(base_size = 14)
+
+nrow(subway_ridership_ordes_2024)
+nrow(subway_ridership_ordes_2025)
+```
+
+```{r}
+hourly_inbound_2024 <- subway_ridership_ordes_2024 %>%
+  filter(in_pricing_zone_origin == 0, in_pricing_zone_destination == 1) %>%
+  group_by(`Hour of Day`) %>%
+  summarise(avg_riders = sum(`Estimated Average Ridership`, na.rm = TRUE)) %>%
+  mutate(year = 2024)
+
+hourly_inbound_2025 <- subway_ridership_ordes_2025 %>%
+  filter(in_pricing_zone_origin == 0, in_pricing_zone_destination == 1) %>%
+  group_by(`Hour of Day`) %>%
+  summarise(avg_riders = sum(`Estimated Average Ridership`, na.rm = TRUE)) %>%
+  mutate(year = 2025)
+
+bind_rows(hourly_inbound_2024, hourly_inbound_2025) %>%
+  ggplot(aes(x = `Hour of Day`, y = avg_riders, color = factor(year))) +
+  geom_line(size = 1.2) +
+  geom_point(size = 2) +
+  labs(
+    title = "Inbound Ridership by Hour (Outside → Inside CZ)",
+    x = "Hour of Day",
+    y = "Estimated Avg. Riders",
+    color = "Year"
+  ) +
+  theme_minimal(base_size = 13)
+```
+November & December = holiday season, potentially more travel, commuting, tourism
+
+January = typically a low ridership month in NYC, post-holidays
+
+We're comparing monthly aggregates, but 2025’s only from early January.
+
+```{r}
+weekday_inbound_2024 <- subway_ridership_ordes_2024 %>%
+  filter(in_pricing_zone_origin == 0, in_pricing_zone_destination == 1) %>%
+  group_by(`Day of Week`) %>%
+  summarise(avg_riders = sum(`Estimated Average Ridership`, na.rm = TRUE)) %>%
+  mutate(year = 2024)
+
+weekday_inbound_2025 <- subway_ridership_ordes_2025 %>%
+  filter(in_pricing_zone_origin == 0, in_pricing_zone_destination == 1) %>%
+  group_by(`Day of Week`) %>%
+  summarise(avg_riders = sum(`Estimated Average Ridership`, na.rm = TRUE)) %>%
+  mutate(year = 2025)
+
+```
+
+```{r}
+hourly_all <- bind_rows(hourly_inbound_2024, hourly_inbound_2025) %>%
+  group_by(year) %>%
+  mutate(normalized = avg_riders / max(avg_riders, na.rm = TRUE))
+```
+```{r}
+#WEEKENDS VS WEEKDAYS
+
+subway_ridership_ordes_2024 <- subway_ridership_ordes_2024 %>%
+  mutate(
+    day_type = if_else(`Day of Week` %in% c("Saturday", "Sunday"), "Weekend", "Weekday")
+  )
+
+subway_ridership_ordes_2025 <- subway_ridership_ordes_2025 %>%
+  mutate(
+    day_type = if_else(`Day of Week` %in% c("Saturday", "Sunday"), "Weekend", "Weekday")
+  )
+
+hourly_daytype_2024 <- subway_ridership_ordes_2024 %>%
+  filter(in_pricing_zone_origin == 0, in_pricing_zone_destination == 1) %>%
+  group_by(`Hour of Day`, day_type) %>%
+  summarise(avg_riders = sum(`Estimated Average Ridership`, na.rm = TRUE), .groups = "drop") %>%
+  mutate(year = 2024)
+
+hourly_daytype_2025 <- subway_ridership_ordes_2025 %>%
+  filter(in_pricing_zone_origin == 0, in_pricing_zone_destination == 1) %>%
+  group_by(`Hour of Day`, day_type) %>%
+  summarise(avg_riders = sum(`Estimated Average Ridership`, na.rm = TRUE), .groups = "drop") %>%
+  mutate(year = 2025)
+
+hourly_daytype_all <- bind_rows(hourly_daytype_2024, hourly_daytype_2025) %>%
+  group_by(year, day_type) %>%
+  mutate(normalized = avg_riders / max(avg_riders, na.rm = TRUE)) %>%
+  ungroup()
+
+ggplot(hourly_daytype_all, aes(x = `Hour of Day`, y = normalized, color = factor(year))) +
+  geom_line(size = 1.2) +
+  facet_wrap(~day_type) +
+  labs(
+    title = "Normalized Inbound Ridership (Outside → Inside CZ)",
+    subtitle = "Weekday vs Weekend Pattern | By Hour of Day",
+    x = "Hour of Day",
+    y = "Normalized Ridership (0–1)",
+    color = "Year"
+  ) +
+  theme_minimal(base_size = 14)
+
+```
+
+```{r}
+# For 2024
+heatmap_data_2024 <- subway_ridership_ordes_2024 %>%
+  filter(in_pricing_zone_origin == 0, in_pricing_zone_destination == 1) %>%
+  group_by(`Day of Week`, `Hour of Day`) %>%
+  summarise(avg_riders = sum(`Estimated Average Ridership`, na.rm = TRUE), .groups = "drop") %>%
+  mutate(year = 2024)
+
+# For 2025
+heatmap_data_2025 <- subway_ridership_ordes_2025 %>%
+  filter(in_pricing_zone_origin == 0, in_pricing_zone_destination == 1) %>%
+  group_by(`Day of Week`, `Hour of Day`) %>%
+  summarise(avg_riders = sum(`Estimated Average Ridership`, na.rm = TRUE), .groups = "drop") %>%
+  mutate(year = 2025)
+
+heatmap_data <- bind_rows(heatmap_data_2024, heatmap_data_2025) %>%
+  group_by(year) %>%
+  mutate(normalized_riders = avg_riders / max(avg_riders, na.rm = TRUE)) %>%
+  ungroup()
+
+heatmap_data$`Day of Week` <- factor(heatmap_data$`Day of Week`, 
+                                     levels = c("Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday"))
+
+ggplot(heatmap_data, aes(x = `Hour of Day`, y = `Day of Week`, fill = normalized_riders)) +
+  geom_tile(color = "white") +
+  scale_fill_viridis_c(name = "Normalized\nRidership", option = "C") +
+  facet_wrap(~year) +
+  labs(
+    title = "Inbound Subway Ridership Into Congestion Zone",
+    subtitle = "By Day of Week & Hour | Normalized by Year",
+    x = "Hour of Day",
+    y = "Day of Week"
+  ) +
+  theme_minimal(base_size = 13)
+
+```
+
+```{r}
+# 2024: Origin → inside CZ
+inbound_map_2024 <- subway_ridership_ordes_2024 %>%
+  filter(in_pricing_zone_origin == 0, in_pricing_zone_destination == 1) %>%
+  group_by(`Origin Station Complex Name`, `Origin Latitude`, `Origin Longitude`) %>%
+  summarise(total_riders = sum(`Estimated Average Ridership`, na.rm = TRUE), .groups = "drop") %>%
+  mutate(year = 2024)
+
+# 2025: Origin → inside CZ
+inbound_map_2025 <- subway_ridership_ordes_2025 %>%
+  filter(in_pricing_zone_origin == 0, in_pricing_zone_destination == 1) %>%
+  group_by(`Origin Station Complex Name`, `Origin Latitude`, `Origin Longitude`) %>%
+  summarise(total_riders = sum(`Estimated Average Ridership`, na.rm = TRUE), .groups = "drop") %>%
+  mutate(year = 2025)
+
+inbound_map_2024 <- inbound_map_2024 %>%
+  mutate(scaled_riders = rescale(total_riders, to = c(4, 15)))
+
+inbound_map_2025 <- inbound_map_2025 %>%
+  mutate(scaled_riders = rescale(total_riders, to = c(4, 15)))
+
+pal_2024 <- colorNumeric(palette = "YlGnBu", domain = inbound_map_2024$total_riders)
+
+leaflet(data = inbound_map_2024) %>%
+  addTiles() %>%
+  addCircleMarkers(
+    lng = ~`Origin Longitude`,
+    lat = ~`Origin Latitude`,
+    radius = ~scaled_riders,
+    fillColor = ~pal_2024(total_riders),
+    color = "#333333",
+    stroke = TRUE,
+    weight = 0.5,
+    fillOpacity = 0.8,
+    label = ~paste0(
+      "<b>", `Origin Station Complex Name`, "</b><br>",
+      "Inbound Riders (est.): ", format(round(total_riders), big.mark = ",")
+    ) %>% lapply(HTML)
+  ) %>%
+  addLegend(
+    position = "bottomright",
+    pal = pal_2024,
+    values = ~total_riders,
+    title = "Inbound Riders (2024)",
+    opacity = 0.8
+  ) %>%
+  setView(lng = -73.985, lat = 40.75, zoom = 11)
+```
+```{r}
+origin_outside_cz_only <- updated_subway_station_List_with_congestion_flag %>%
+  filter(congestion_area_flag == 0) %>%
+  distinct(station_name)
+
+inbound_cz_map_data <- subway_ridership_ordes_2025 %>%
+  filter(
+    `Origin Station Complex Name` %in% origin_outside_cz_only$station_name,
+    in_pricing_zone_destination == 1
+  ) %>%
+  group_by(`Origin Station Complex Name`, `Origin Latitude`, `Origin Longitude`) %>%
+  summarise(
+    total_riders = sum(`Estimated Average Ridership`, na.rm = TRUE),
+    .groups = "drop"
+  ) %>%
+  arrange(desc(total_riders))
+
+pal <- colorNumeric("YlOrRd", domain = inbound_cz_map_data$total_riders)
+
+leaflet(inbound_cz_map_data) %>%
+  addTiles() %>%
+  addCircleMarkers(
+    lng = ~`Origin Longitude`,
+    lat = ~`Origin Latitude`,
+    radius = ~rescale(total_riders, to = c(4, 15)),
+    fillColor = ~pal(total_riders),
+    color = "#333333",
+    stroke = TRUE,
+    weight = 0.5,
+    fillOpacity = 0.8,
+    label = ~paste0(
+      "<b>", `Origin Station Complex Name`, "</b><br>",
+      "Inbound Riders: ", format(round(total_riders), big.mark = ",")
+    ) %>% lapply(HTML)
+  ) %>%
+  addLegend(
+    position = "bottomright",
+    pal = pal,
+    values = ~total_riders,
+    title = "Inbound Riders to CZ in 2025"
+  ) %>%
+  setView(lng = -73.985, lat = 40.75, zoom = 11)
+```
+
+```{r}
+subway_ridership_feb_2025 <- read_csv(
+  "/Users/salmasyakira/Documents/Spring 2025/Data Analysis using R/Final Project/MTA_Subway_Origin-Destination_Ridership_Estimate__Beginning_2025_FEB_20250420.csv"
+)
+
+names(subway_ridership_feb_2025)
+head(subway_ridership_feb_2025)
+
+unique(subway_ridership_feb_2025$Timestamp)
+
+subway_ridership_feb_2025 %>%
+  count(Timestamp) %>%
+  arrange(Timestamp)
+
+timestamp_as_date <- mdy_hms(subway_ridership_feb_2025$Timestamp)
+
+range(timestamp_as_date, na.rm = TRUE)
+
+```
+
+```{r}
+subway_ridership_feb_2025 <- subway_ridership_feb_2025 %>%
+  mutate(
+    timestamp_parsed = mdy_hms(Timestamp),
+    date = as.Date(timestamp_parsed),
+    day = wday(timestamp_parsed, label = TRUE, abbr = FALSE),
+    month = month(timestamp_parsed, label = TRUE, abbr = FALSE),
+    year = year(timestamp_parsed)
+  )
+
+subway_ridership_feb_2025 <- subway_ridership_feb_2025 %>%
+  left_join(
+    updated_subway_station_List_with_congestion_flag %>%
+      rename(`Origin Station Complex Name` = station_name,
+             in_pricing_zone_origin = congestion_area_flag),
+    by = "Origin Station Complex Name"
+  ) %>%
+  left_join(
+    updated_subway_station_List_with_congestion_flag %>%
+      rename(`Destination Station Complex Name` = station_name,
+             in_pricing_zone_destination = congestion_area_flag),
+    by = "Destination Station Complex Name"
+  )
+
+subway_ridership_2025_full <- bind_rows(
+  subway_ridership_ordes_2025,
+  subway_ridership_feb_2025
+)
+
+range(subway_ridership_2025_full$date)
+
+write_csv(subway_ridership_2025_full, "subway_ridership_2025_JanFeb.csv")
+
+```
+
+```{r}
+daily_inbound_2025 <- subway_ridership_2025_full %>%
+  filter(in_pricing_zone_origin == 0, in_pricing_zone_destination == 1) %>%
+  group_by(date) %>%
+  summarise(
+    total_riders = sum(`Estimated Average Ridership`, na.rm = TRUE),
+    .groups = "drop"
+  ) %>%
+  mutate(
+    week = case_when(
+      date >= as.Date("2025-01-06") & date <= as.Date("2025-01-12") ~ "Week 1",
+      date >= as.Date("2025-02-03") & date <= as.Date("2025-02-09") ~ "Week 5",
+      TRUE ~ "Other"
+    )
+  ) %>%
+  filter(week != "Other")
+
+ggplot(daily_inbound_2025, aes(x = date, y = total_riders, color = week)) +
+  geom_line(size = 1.2) +
+  geom_point(size = 3) +
+  scale_y_continuous(labels = scales::comma) +
+  labs(
+    title = "Inbound Subway Riders Into Congestion Zone",
+    subtitle = "Week 1 vs Week 5 After Pricing Policy",
+    x = "Date",
+    y = "Estimated Riders (Outside ➝ Inside CZ)",
+    color = "Week"
+  ) +
+  theme_minimal(base_size = 14)
+```
+
+```{r}
+daily_inbound_2025 <- subway_ridership_2025_full %>%
+  filter(in_pricing_zone_origin == 0, in_pricing_zone_destination == 1) %>%
+  group_by(date) %>%
+  summarise(total_riders = sum(`Estimated Average Ridership`, na.rm = TRUE)) %>%
+  mutate(day_of_week = wday(date, label = TRUE, abbr = FALSE))
+
+daily_inbound_matched <- daily_inbound_2025 %>%
+  filter(
+    date %in% as.Date(c(
+      "2025-01-06", "2025-01-07", "2025-01-08", "2025-01-09", "2025-01-10", "2025-01-11", "2025-01-12",
+      "2025-02-03", "2025-02-04", "2025-02-05", "2025-02-06", "2025-02-07", "2025-02-08", "2025-02-09"
+    ))
+  ) %>%
+  mutate(week = if_else(month(date) == 1, "Week 1 (Jan)", "Week 5 (Feb)"))
+
+ggplot(daily_inbound_matched, aes(x = day_of_week, y = total_riders, fill = week)) +
+  geom_col(position = "dodge") +
+  scale_y_continuous(labels = scales::comma) +
+  labs(
+    title = "Inbound Riders into Congestion Zone",
+    subtitle = "Same Days Compared: Week of Jan 6 vs Week of Feb 3",
+    x = "Day of Week",
+    y = "Estimated Riders (Outside ➝ Inside CZ)",
+    fill = "Week"
+  ) +
+  theme_minimal(base_size = 14)
+```
+
+```{r}
+subway_ridership_ordes_2024 <- subway_ridership_ordes_2024 %>%
+  mutate(`Estimated Average Ridership` = `Estimated Average Ridership Scaled`)
+
+# Treatment group
+daily_treatment_2024 <- subway_ridership_ordes_2024 %>%
+  filter(in_pricing_zone_origin == 0, in_pricing_zone_destination == 1) %>%
+  group_by(date) %>%
+  summarise(riders = sum(`Estimated Average Ridership`, na.rm = TRUE)) %>%
+  mutate(group = "treatment")
+
+# Control group
+daily_control_2024 <- subway_ridership_ordes_2024 %>%
+  filter(in_pricing_zone_origin == 0, in_pricing_zone_destination == 0) %>%
+  group_by(date) %>%
+  summarise(riders = sum(`Estimated Average Ridership`, na.rm = TRUE)) %>%
+  mutate(group = "control")
+
+did_data <- bind_rows(
+  daily_treatment_2024, daily_treatment_2025,
+  daily_control_2024, daily_control_2025
+) %>%
+  mutate(
+    post = if_else(date >= as.Date("2025-01-05"), 1, 0),
+    year = year(date)
+  )
+
+model_did <- feols(riders ~ post * group, data = did_data)
+summary(model_did)
+
+did_data %>%
+  group_by(post, group) %>%
+  summarise(avg_riders = mean(riders, na.rm = TRUE))
+
+summary(model_did)
+
+```
+Based on a difference-in-differences regression, the implementation of NYC’s congestion pricing policy on January 5, 2025, was associated with a statistically significant average decrease of 308,391 inbound subway riders per day (p < 0.001). This estimate controls for underlying time trends and baseline differences using flows from outside the zone to outside the zone as a comparison group.
+
+That control group post jump (1M+ riders) is probably due to expanded data weeks in 2025 (not an actual system-wide explosion) → but the DiD handles that by comparing relative changes.
+
+```{r}
+save.image(file = "~/Documents/Spring 2025/Data Analysis using R/Final Project/final_congestion_did_project.RData")
+```
+
